@@ -267,6 +267,12 @@ internal class BookUI : MonoBehaviour
         Cursor.visible = prevVisible;
     }
 
+    public static void CloseIfOpen()
+    {
+        if (instance != null && instance.open)
+            instance.Close();
+    }
+
     private void Update()
     {
         KeepCursor();
@@ -739,6 +745,21 @@ internal class FireballCaster : MonoBehaviour
         instance.BuildRing();
     }
 
+    public static void Cancel()
+    {
+        FireballCaster caster = instance;
+        if (caster == null)
+            return;
+
+        instance = null;
+        caster.enabled = false;
+
+        if (caster.ring != null)
+            caster.ring.gameObject.SetActive(false);
+
+        Destroy(caster.gameObject);
+    }
+
     private static readonly Color FireColor = new Color(1f, 0.45f, 0.05f);
 
     private const int Segments = 28;
@@ -810,6 +831,17 @@ internal class FireballCaster : MonoBehaviour
             instance = null;
     }
 
+    private static bool CastPressed()
+    {
+        if (Input.GetKeyDown(FireKey)
+            || Input.GetKeyDown(KeyCode.Period)
+            || Input.GetKeyDown(KeyCode.KeypadPeriod))
+            return true;
+
+        string typed = Input.inputString;
+        return !string.IsNullOrEmpty(typed) && typed.IndexOf('.') >= 0;
+    }
+
     private void Update()
     {
         Camera head = PlayerView.Head();
@@ -844,7 +876,7 @@ internal class FireballCaster : MonoBehaviour
             ring.gameObject.SetActive(false);
         }
 
-        if (Input.GetKeyDown(FireKey))
+        if (CastPressed())
             Fire(head);
     }
 
@@ -916,7 +948,6 @@ internal class FloatingStaff : MonoBehaviour
     private State state;
     private Rigidbody rb;
     private Pickup pickup;
-    private SpellBook book;
     private MiniBook mini;
     private Light glow;
     private readonly List<Material> materials = new List<Material>();
@@ -951,11 +982,18 @@ internal class FloatingStaff : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (HeldByPlayer == this)
-            HeldByPlayer = null;
-
-        DestroyBook();
+        ClearHeldState();
         DestroyMini();
+    }
+
+    private void ClearHeldState()
+    {
+        if (HeldByPlayer != this)
+            return;
+
+        HeldByPlayer = null;
+        FireballCaster.Cancel();
+        BookUI.CloseIfOpen();
     }
 
     private bool IsHeld()
@@ -963,7 +1001,7 @@ internal class FloatingStaff : MonoBehaviour
         return pickup != null && (pickup.Interactors.Count > 0 || pickup.IsDocked);
     }
 
-    private bool HeldByLocal()
+    internal bool IsHeldByLocal()
     {
         if (pickup == null)
             return false;
@@ -979,13 +1017,14 @@ internal class FloatingStaff : MonoBehaviour
 
     private void UpdateMini()
     {
-        bool local = HeldByLocal();
+        bool local = IsHeldByLocal();
         if (local)
             HeldByPlayer = this;
-        else if (HeldByPlayer == this)
-            HeldByPlayer = null;
+        else
+            ClearHeldState();
+
         if (local && mini == null && PlayerView.Head() != null)
-            mini = MiniBook.Create();
+            mini = MiniBook.Create(this);
         else if (!local && mini != null)
             DestroyMini();
     }
@@ -1011,25 +1050,6 @@ internal class FloatingStaff : MonoBehaviour
         {
             Destroy(mini.gameObject);
             mini = null;
-        }
-    }
-
-    private void SpawnBook()
-    {
-        if (book != null || PlayerView.Head() == null)
-            return;
-
-        Vector3 side = Quaternion.Euler(0f, startRot.eulerAngles.y, 0f) * Vector3.right;
-        Vector3 pos = new Vector3(targetPos.x, surfaceY + 1f, targetPos.z) + side * 0.9f;
-        book = SpellBook.Create(pos);
-    }
-
-    private void DestroyBook()
-    {
-        if (book != null)
-        {
-            Destroy(book.gameObject);
-            book = null;
         }
     }
 
@@ -1131,7 +1151,6 @@ internal class FloatingStaff : MonoBehaviour
             if (riseT >= 1f)
             {
                 state = State.Floating;
-                SpawnBook();
             }
 
             return;
@@ -1189,7 +1208,6 @@ internal class FloatingStaff : MonoBehaviour
             rb.WakeUp();
         }
 
-        DestroyBook();
         state = State.Idle;
         restTimer = 0f;
         SetGlow(0f);
@@ -1307,6 +1325,7 @@ internal class MiniBook : MonoBehaviour
 {
     public static KeyCode OpenKey = KeyCode.None;
 
+    private FloatingStaff owner;
     private Transform runes;
     private Vector3 smooth;
     private float shown;
@@ -1314,10 +1333,11 @@ internal class MiniBook : MonoBehaviour
     private bool placed;
     private bool needLeave;
 
-    public static MiniBook Create()
+    public static MiniBook Create(FloatingStaff owner)
     {
         GameObject go = new GameObject("MiniBook");
         MiniBook b = go.AddComponent<MiniBook>();
+        b.owner = owner;
         b.runes = BookModel.Build(go.transform);
         b.seed = Random.value * 10f;
         go.transform.localScale = Vector3.zero;
@@ -1326,6 +1346,9 @@ internal class MiniBook : MonoBehaviour
 
     private void Update()
     {
+        if (owner == null || !owner.IsHeldByLocal())
+            return;
+
         Camera head = PlayerView.Head();
 
         if (head == null)
@@ -1461,93 +1484,5 @@ internal static class PlayerHands
         }
 
         return 1f;
-    }
-}
-
-// ===== spellbook.cs =====
-
-internal class SpellBook : MonoBehaviour
-{
-    public float showRadius = 5f;
-    public float touchRadius = 0.7f;
-
-    private Light glow;
-    private Transform runes;
-    private Vector3 basePos;
-    private float shown;
-    private float seed;
-    private bool needLeave;
-
-    public static SpellBook Create(Vector3 position)
-    {
-        GameObject go = new GameObject("SpellBook");
-        go.transform.position = position;
-        SpellBook b = go.AddComponent<SpellBook>();
-        b.Build();
-        return b;
-    }
-
-    private void Build()
-    {
-        basePos = transform.position;
-        seed = Random.value * 10f;
-        runes = BookModel.Build(transform);
-
-        GameObject lightObj = new GameObject("BookGlow");
-        lightObj.transform.SetParent(transform, false);
-        lightObj.transform.localPosition = new Vector3(0f, 0f, -0.3f);
-        glow = lightObj.AddComponent<Light>();
-        glow.type = LightType.Point;
-        glow.color = new Color(0.75f, 0.55f, 1f);
-        glow.range = 3f;
-        glow.intensity = 0f;
-
-        transform.localScale = Vector3.zero;
-    }
-
-    private void Update()
-    {
-        Camera head = PlayerView.Head();
-
-        if (head == null)
-        {
-            transform.localScale = Vector3.zero;
-            return;
-        }
-
-        Vector3 to = head.transform.position - basePos;
-        float dy = Mathf.Abs(to.y);
-        to.y = 0f;
-        float dist = to.magnitude;
-
-        bool near = dist < showRadius && dy < 3f;
-        shown = Mathf.MoveTowards(shown, near ? 1f : 0f, Time.deltaTime * 2.5f);
-        float e = Mathf.SmoothStep(0f, 1f, shown);
-
-        transform.localScale = Vector3.one * e;
-        transform.position = basePos + Vector3.up * (Mathf.Sin(Time.time * 1.6f + seed) * 0.05f);
-
-        if (dist > 0.01f)
-            transform.rotation = Quaternion.LookRotation(-to.normalized) * Quaternion.Euler(0f, 0f, Mathf.Sin(Time.time * 1.2f + seed) * 6f);
-
-        runes.Rotate(Vector3.up, 50f * Time.deltaTime, Space.Self);
-        glow.intensity = e * (0.9f + 0.3f * Mathf.Sin(Time.time * 3f));
-
-        if (BookUI.IsOpen)
-        {
-            needLeave = true;
-            return;
-        }
-
-        if (needLeave)
-        {
-            if (dist > touchRadius * 1.6f)
-                needLeave = false;
-
-            return;
-        }
-
-        if (e > 0.9f && dist < touchRadius && dy < 2f)
-            BookUI.Open();
     }
 }
