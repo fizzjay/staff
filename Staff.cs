@@ -772,6 +772,7 @@ internal class FireballCaster : MonoBehaviour
 
         GameObject go = new GameObject("FireballCaster");
         instance = go.AddComponent<FireballCaster>();
+        instance.sourceStaff = FloatingStaff.HeldByPlayer;
         instance.BuildRing();
     }
 
@@ -799,6 +800,7 @@ internal class FireballCaster : MonoBehaviour
     private float seed;
     private bool hasTarget;
     private bool fireRequestedByGui;
+    private FloatingStaff sourceStaff;
     private Vector3 targetPoint;
 
     private void BuildRing()
@@ -896,18 +898,18 @@ internal class FireballCaster : MonoBehaviour
         bool castPressed = fireRequestedByGui || CastPressed();
         fireRequestedByGui = false;
 
-        if (castPressed)
-        {
-            Fire(head);
-            return;
-        }
-
         if (BookUI.IsOpen)
         {
             ring.gameObject.SetActive(false);
+
+            if (castPressed)
+                Fire(head);
+
             return;
         }
 
+        // Update the aim point and reticle before firing so the shot uses the
+        // same target the player is currently seeing.
         FindTarget(head);
 
         if (hasTarget)
@@ -929,7 +931,8 @@ internal class FireballCaster : MonoBehaviour
             ring.gameObject.SetActive(false);
         }
 
-        // Cast input is handled before target-ring updates above.
+        if (castPressed)
+            Fire(head);
     }
 
     private void FindTarget(Camera head)
@@ -937,7 +940,7 @@ internal class FireballCaster : MonoBehaviour
         hasTarget = false;
 
         RaycastHit[] hits = Physics.RaycastAll(head.transform.position, head.transform.forward, 80f, ~0, QueryTriggerInteraction.Ignore);
-        FloatingStaff held = FloatingStaff.HeldByPlayer;
+        FloatingStaff held = sourceStaff != null ? sourceStaff : FloatingStaff.HeldByPlayer;
         float best = float.MaxValue;
 
         foreach (RaycastHit h in hits)
@@ -959,18 +962,15 @@ internal class FireballCaster : MonoBehaviour
 
     private void Fire(Camera head)
     {
-        Vector3 origin;
-
-        if (FloatingStaff.HeldByPlayer != null)
+        FloatingStaff staff = sourceStaff != null ? sourceStaff : FloatingStaff.HeldByPlayer;
+        if (staff == null || !staff.IsHeldByLocal())
         {
-            origin = FloatingStaff.HeldByPlayer.TopPoint();
-        }
-        else
-        {
-            Quaternion yaw = Quaternion.Euler(0f, head.transform.eulerAngles.y, 0f);
-            origin = head.transform.position + yaw * new Vector3(PlayerHands.FreeSideSign() * 0.25f, -0.3f, 0.3f);
+            BookUI.ShowToast("Hold the staff to cast.");
+            Cancel();
+            return;
         }
 
+        Vector3 origin = staff.TopPoint();
         Vector3 target = hasTarget ? targetPoint : head.transform.position + head.transform.forward * 60f;
         Vector3 dir = target - origin;
         dir = dir.sqrMagnitude > 0.01f ? dir.normalized : head.transform.forward;
@@ -1088,14 +1088,14 @@ internal class FloatingStaff : MonoBehaviour
     public Vector3 TopPoint()
     {
         Vector3 axis = transform.TransformDirection(lengthAxis).normalized * topSign;
-        MeshRenderer[] meshes = GetComponentsInChildren<MeshRenderer>();
+        Renderer[] renderers = GetComponentsInChildren<Renderer>();
 
-        if (meshes.Length == 0)
+        if (renderers.Length == 0)
             return transform.position + axis * 0.8f;
 
-        Bounds b = meshes[0].bounds;
-        for (int i = 1; i < meshes.Length; i++)
-            b.Encapsulate(meshes[i].bounds);
+        Bounds b = renderers[0].bounds;
+        for (int i = 1; i < renderers.Length; i++)
+            b.Encapsulate(renderers[i].bounds);
 
         Vector3 e = b.extents;
         float ext = Mathf.Abs(axis.x) * e.x + Mathf.Abs(axis.y) * e.y + Mathf.Abs(axis.z) * e.z;
