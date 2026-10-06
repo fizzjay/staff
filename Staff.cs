@@ -217,6 +217,24 @@ internal class BookUI : MonoBehaviour
 
     public static void Open()
     {
+        if (FireballCaster.IsCharged)
+        {
+            ShowToast("Cast the waiting spell before drawing another.");
+            return;
+        }
+
+        GetOrCreateInstance().Show();
+    }
+
+    public static void ShowToast(string message)
+    {
+        BookUI ui = GetOrCreateInstance();
+        ui.toastMessage = message;
+        ui.toastUntil = Time.unscaledTime + 3f;
+    }
+
+    private static BookUI GetOrCreateInstance()
+    {
         if (instance == null)
         {
             GameObject go = new GameObject("SpellBookUI");
@@ -224,7 +242,7 @@ internal class BookUI : MonoBehaviour
             instance = go.AddComponent<BookUI>();
         }
 
-        instance.Show();
+        return instance;
     }
 
     private static readonly Color Cream = new Color(0.94f, 0.87f, 0.71f);
@@ -242,6 +260,7 @@ internal class BookUI : MonoBehaviour
     private List<Vector2> current;
     private string status = "";
     private float toastUntil;
+    private string toastMessage = "";
     private Texture2D dot;
     private GUIStyle title;
     private GUIStyle glyph;
@@ -478,7 +497,7 @@ internal class BookUI : MonoBehaviour
         float rowY = right.y + 96f * sc;
         GUI.Label(new Rect(right.x + pad, rowY, 100f * sc, 100f * sc), "B", glyph);
         GUI.Label(new Rect(right.x + pad + 110f * sc, rowY + 4f * sc, right.width - pad * 2f - 110f * sc, 44f * sc), "fireball", label);
-        GUI.Label(new Rect(right.x + pad + 110f * sc, rowY + 50f * sc, right.width - pad * 2f - 110f * sc, 60f * sc), "\"draw it, cast, then click the button", small);
+        GUI.Label(new Rect(right.x + pad + 110f * sc, rowY + 50f * sc, right.width - pad * 2f - 110f * sc, 60f * sc), "draw B, press cast, then press . to fire", small);
 
         GUI.Label(new Rect(right.x + pad, right.yMax - 190f * sc, right.width - pad * 2f, 100f * sc), status, small);
 
@@ -531,6 +550,12 @@ internal class BookUI : MonoBehaviour
         foreach (List<Vector2> s in strokes)
             count += s.Count;
 
+        if (FireballCaster.IsCharged)
+        {
+            status = "cast the waiting spell before drawing another.";
+            return;
+        }
+
         if (count < 12)
         {
             status = "draw something first.";
@@ -542,7 +567,7 @@ internal class BookUI : MonoBehaviour
         if (BRecognizer.IsB(strokes, out reason))
         {
             FireballCaster.Charge();
-            toastUntil = Time.unscaledTime + 3f;
+            ShowToast("Fireball ready. Press . to cast.");
             Close();
             return;
         }
@@ -565,7 +590,7 @@ internal class BookUI : MonoBehaviour
         GUIStyle t = new GUIStyle(label);
         t.alignment = TextAnchor.MiddleCenter;
         t.normal.textColor = Cream;
-        GUI.Label(r, "draw it, cast, then click the button", t);
+        GUI.Label(r, toastMessage, t);
     }
 }
 
@@ -735,6 +760,11 @@ internal class FireballCaster : MonoBehaviour
 
     private static FireballCaster instance;
 
+    public static bool IsCharged
+    {
+        get { return instance != null; }
+    }
+
     public static void Charge()
     {
         if (instance != null)
@@ -768,6 +798,7 @@ internal class FireballCaster : MonoBehaviour
     private float spin;
     private float seed;
     private bool hasTarget;
+    private bool fireRequestedByGui;
     private Vector3 targetPoint;
 
     private void BuildRing()
@@ -831,6 +862,19 @@ internal class FireballCaster : MonoBehaviour
             instance = null;
     }
 
+    private void OnGUI()
+    {
+        Event e = Event.current;
+        if (e == null || e.type != EventType.KeyDown)
+            return;
+
+        if (e.keyCode == FireKey
+            || e.keyCode == KeyCode.Period
+            || e.keyCode == KeyCode.KeypadPeriod
+            || e.character == '.')
+            fireRequestedByGui = true;
+    }
+
     private static bool CastPressed()
     {
         if (Input.GetKeyDown(FireKey)
@@ -848,6 +892,15 @@ internal class FireballCaster : MonoBehaviour
 
         if (head == null)
             return;
+
+        bool castPressed = fireRequestedByGui || CastPressed();
+        fireRequestedByGui = false;
+
+        if (castPressed)
+        {
+            Fire(head);
+            return;
+        }
 
         if (BookUI.IsOpen)
         {
@@ -876,8 +929,7 @@ internal class FireballCaster : MonoBehaviour
             ring.gameObject.SetActive(false);
         }
 
-        if (CastPressed())
-            Fire(head);
+        // Cast input is handled before target-ring updates above.
     }
 
     private void FindTarget(Camera head)
@@ -924,6 +976,11 @@ internal class FireballCaster : MonoBehaviour
         dir = dir.sqrMagnitude > 0.01f ? dir.normalized : head.transform.forward;
 
         Fireball.Launch(origin + dir * 0.25f, dir);
+        BookUI.ShowToast("Fireball cast.");
+
+        if (instance == this)
+            instance = null;
+
         Destroy(gameObject);
     }
 }
